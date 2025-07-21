@@ -162,10 +162,6 @@ if ( ! class_exists( 'WC_Connect_Functions' ) ) {
 				)
 			);
 
-			if ( empty( $rates ) ) {
-				return false;
-			}
-
 			ob_start();
 			$header =
 				__( 'Country Code', 'woocommerce' ) . ',' .
@@ -262,7 +258,7 @@ if ( ! class_exists( 'WC_Connect_Functions' ) ) {
 
 			$csv        = ob_get_clean();
 			$upload_dir = wp_upload_dir();
-			$backed_up  = file_put_contents( $upload_dir['basedir'] . '/taxjar-wc_tax_rates-' . date( 'Y-m-d' ) . '-' . time() . '.csv', $csv );
+			$backed_up  = file_put_contents( $upload_dir['basedir'] . '/taxjar-wc_tax_rates-' . date( 'm-d-Y' ) . '-' . time() . '.csv', $csv );
 
 			return (bool) $backed_up;
 		}
@@ -282,7 +278,7 @@ if ( ! class_exists( 'WC_Connect_Functions' ) ) {
 				return false;
 			}
 
-			$files = array();
+			$files = [];
 			foreach ( $found_files as $file ) {
 				$filename           = basename( $file );
 				$files[ $filename ] = $upload_dir['baseurl'] . '/' . $filename;
