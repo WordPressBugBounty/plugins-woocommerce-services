@@ -8,13 +8,13 @@
  * Author URI: https://woocommerce.com/
  * Text Domain: woocommerce-services
  * Domain Path: /i18n/languages/
- * Version: 3.1.1
+ * Version: 3.4.0
  * Requires Plugins: woocommerce
  * Requires PHP: 7.4
  * Requires at least: 6.7
- * Tested up to: 6.8
- * WC requires at least: 10.0
- * WC tested up to: 10.2
+ * Tested up to: 6.9
+ * WC requires at least: 10.3
+ * WC tested up to: 10.5
  *
  * Copyright (c) 2017-2023 Automattic
  *
@@ -281,7 +281,8 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 
 		protected static $wcs_version;
 
-		public const MIGRATION_DISMISSAL_COOKIE_KEY = 'wcst-wcshipping-migration-dismissed';
+		public const MIGRATION_DISMISSAL_COOKIE_KEY        = 'wcst-wcshipping-migration-dismissed';
+		private const SIFT_FETCH_IN_PROGRESS_TRANSIENT_KEY = 'wc_connect_sift_fetch_in_progress';
 
 		public static function plugin_deactivation() {
 			wp_clear_scheduled_hook( 'wc_connect_fetch_service_schemas' );
@@ -874,7 +875,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 			$shipping_label         = new WC_Connect_Shipping_Label( $api_client, $settings_store, $schemas_store, $payment_methods_store );
 			$nux                    = new WC_Connect_Nux( $tracks, $shipping_label );
 			$store_notices_notifier = new StoreNoticesNotifier( $taxes_logger->is_debug_enabled() );
-			$taxjar                 = new WC_Connect_TaxJar_Integration( $api_client, $taxes_logger, $this->wc_connect_base_url, $store_notices_notifier );
+			$taxjar                 = new WC_Connect_TaxJar_Integration( $api_client, $taxes_logger, $this->wc_connect_base_url, $tracks, $store_notices_notifier );
 			$this->set_store_notices_notifier( $store_notices_notifier );
 			$paypal_ec     = new WC_Connect_PayPal_EC( $api_client, $nux );
 			$label_reports = new WC_Connect_Label_Reports( $settings_store );
@@ -914,6 +915,11 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 			add_action( 'admin_notices', array( WC_Connect_Error_Notice::instance(), 'render_notice' ) );
 			add_action( 'admin_notices', array( $this, 'render_schema_notices' ) );
 
+			// Don't register settings if only_tax mode.
+			if ( ! self::should_load_shipping_features() ) {
+				return;
+			}
+
 			// We only use the settings page for shipping since tax settings are part of
 			// the core "WooCommerce > Settings > Tax" tab.
 			require_once __DIR__ . '/classes/class-wc-connect-settings-pages.php';
@@ -938,6 +944,8 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 
 			add_action( 'enqueue_wc_connect_script', array( $this, 'enqueue_wc_connect_script' ), 10, 2 );
 
+			add_action( 'wc_connect_fetch_sift_config', array( $this, 'background_fetch_sift_config' ) );
+
 			$tracks = $this->get_tracks();
 			$tracks->init();
 
@@ -945,7 +953,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 			$this->paypal_ec->init();
 
 			// Only register shipping label-related logic if WC Shipping is not active.
-			if ( ! self::is_wc_shipping_activated() && '1' !== WC_Connect_Options::get_option( 'only_tax' ) ) {
+			if ( self::should_load_shipping_features() ) {
 				add_action( 'rest_api_init', array( $this, 'wc_api_dev_init' ), 9999 );
 
 				$this->init_shipping_labels();
@@ -1945,8 +1953,20 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 			$result = ( WC_Connect_Jetpack::is_connected() && '1' === WC_Connect_Options::get_option( 'only_tax' ) ) ||
 						( ! WC_Connect_Jetpack::is_connected() && ! self::_has_any_labels_db_check() );
 
-			// Allow tests to override this functionality
+			// Allow tests to override this functionality.
 			return apply_filters( 'wc_connect_has_only_tax_functionality', $result );
+		}
+
+		/**
+		 * Checks whether shipping-related functionality and views should be loaded.
+		 *
+		 * Shipping features should only be loaded when the WooCommerce Shipping plugin
+		 * is not active and the site is not restricted to tax-only functionality.
+		 *
+		 * @return bool True if shipping features should be loaded, false otherwise.
+		 */
+		public static function should_load_shipping_features(): bool {
+			return ! self::is_wc_shipping_activated() && ! self::has_only_tax_functionality();
 		}
 
 		public function maybe_rename_plugin( $plugins ) {
@@ -1981,17 +2001,21 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 		}
 
 		/**
-		 * Adds the Sift JS page tracker if needed. See the comments for the detailed logic.
+		 * Adds the Sift JS page tracker if needed.
 		 *
-		 * @return  void
+		 * @return void
 		 */
 		public function add_sift_js_tracker() {
 			$sift_configurations = $this->api_client->get_sift_configuration();
 
+			if ( is_wp_error( $sift_configurations ) ) {
+				$this->schedule_background_sift_fetch();
+				return;
+			}
+
 			$connected_data = WC_Connect_Jetpack::get_connection_owner_wpcom_data();
 
-			if ( is_wp_error( $sift_configurations ) || empty( $sift_configurations->beacon_key ) || empty( $connected_data['ID'] ) ) {
-				// Don't add sift tracking if we can't have the parameters to initialize Sift
+			if ( empty( $sift_configurations->beacon_key ) || empty( $connected_data['ID'] ) ) {
 				return;
 			}
 
@@ -2000,23 +2024,62 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 				'user_id'    => $connected_data['ID'],
 			);
 
-			?>
-			<script type="text/javascript">
-				var src = 'https://cdn.sift.com/s.js';
+			wp_register_script(
+				'sift-science',
+				'https://cdn.sift.com/s.js',
+				array(),
+				null,
+				array(
+					'strategy'  => 'defer',
+					'in_footer' => true,
+				)
+			);
 
-				var _sift = ( window._sift = window._sift || [] );
-				_sift.push( [ '_setAccount', '<?php echo esc_attr( $fraud_config['beacon_key'] ); ?>' ] );
-				_sift.push( [ '_setUserId', '<?php echo esc_attr( $fraud_config['user_id'] ); ?>' ] );
-				_sift.push( [ '_trackPageview' ] );
+			wp_register_script(
+				'wc-services-sift',
+				WCSERVICES_JAVASCRIPT_URL . 'sift.js',
+				array( 'sift-science' ),
+				self::get_wcs_version(),
+				array( 'in_footer' => true )
+			);
 
-				if ( ! document.querySelector( '[src="' + src + '"]' ) ) {
-					var script = document.createElement( 'script' );
-					script.src = src;
-					script.async = true;
-					document.body.appendChild( script );
-				}
-			</script>
-			<?php
+			wp_add_inline_script(
+				'wc-services-sift',
+				'var wcServicesSiftConfig = ' . wp_json_encode( $fraud_config ) . ';',
+				'before'
+			);
+
+			wp_enqueue_script( 'wc-services-sift' );
+		}
+
+		/**
+		 * Schedule a background fetch for Sift configuration.
+		 *
+		 * @return void
+		 */
+		private function schedule_background_sift_fetch() {
+			if ( get_transient( self::SIFT_FETCH_IN_PROGRESS_TRANSIENT_KEY ) ) {
+				return;
+			}
+
+			set_transient( self::SIFT_FETCH_IN_PROGRESS_TRANSIENT_KEY, true, 5 * MINUTE_IN_SECONDS );
+
+			if ( ! wp_next_scheduled( 'wc_connect_fetch_sift_config' ) ) {
+				wp_schedule_single_event( time() + 1, 'wc_connect_fetch_sift_config' );
+			}
+		}
+
+		/**
+		 * Fetch Sift configuration in the background.
+		 *
+		 * @return void
+		 */
+		public function background_fetch_sift_config() {
+			$config = $this->api_client->get_sift_configuration( true );
+
+			if ( ! is_wp_error( $config ) ) {
+				delete_transient( self::SIFT_FETCH_IN_PROGRESS_TRANSIENT_KEY );
+			}
 		}
 
 		public function enqueue_wc_connect_script( $root_view, $extra_args = array() ) {

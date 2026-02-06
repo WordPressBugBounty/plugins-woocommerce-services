@@ -5,7 +5,7 @@
         'type' => 'library',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
-        'reference' => '62e6208b9b75f6b207919f7dbdd96b8722778532',
+        'reference' => '37ef67f5413956602b4e6e0157824d2d665cf985',
         'name' => '__root__',
         'dev' => false,
     ),
@@ -16,7 +16,7 @@
             'type' => 'library',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
-            'reference' => '62e6208b9b75f6b207919f7dbdd96b8722778532',
+            'reference' => '37ef67f5413956602b4e6e0157824d2d665cf985',
             'dev_requirement' => false,
         ),
         'automattic/jetpack-a8c-mc-stats' => array(
