@@ -5,9 +5,9 @@ Requires PHP: 7.4
 Requires at least: 7.0
 Requires Plugins: woocommerce
 Tested up to: 7.1
-WC requires at least: 10.8
-WC tested up to: 11.0
-Stable tag: 3.6.13
+WC requires at least: 10.9
+WC tested up to: 11.1
+Stable tag: 3.6.14
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,12 @@ This plugin relies on the following external services:
 2. Checking on the health of WooCommerce Tax
 
 == Changelog ==
+
+= 3.6.14 - 2026-09-03 =
+* Fix   - Prevent a fatal error at checkout when a cart line's price is not numeric.
+* Tweak - Limit the WordPress.com connection banner to the Tax settings and Plugins pages, so it no longer appears on unrelated admin screens.
+* Tweak - Stop registering a redundant copy of the continents REST endpoint on requests that cannot reach it.
+* Tweak - WooCommerce 11.1 Compatibility.
 
 = 3.6.13 - 2026-08-24 =
 * Tweak - WordPress 7.1 Compatibility.
