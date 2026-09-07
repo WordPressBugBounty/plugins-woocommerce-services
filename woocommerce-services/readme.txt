@@ -7,7 +7,7 @@ Requires Plugins: woocommerce
 Tested up to: 7.1
 WC requires at least: 10.9
 WC tested up to: 11.1
-Stable tag: 3.6.14
+Stable tag: 3.6.15
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,13 @@ This plugin relies on the following external services:
 2. Checking on the health of WooCommerce Tax
 
 == Changelog ==
+
+= 3.6.15 - 2026-09-07 =
+* Add   - Prompt merchants to finish signing in to WordPress.com when the site is connected but no account is linked to it, so the missing step is named instead of hidden.
+* Fix   - Write the tax rate backup file as proper CSV, so cities and tax names containing a comma, a quote or an apostrophe are saved exactly as stored and no cell can be treated as a formula when the file is opened in a spreadsheet.
+* Fix   - Security update.
+* Tweak - Stop looking up the legacy DHL live rates inbox note on admin AJAX requests, which cannot display it.
+* Tweak - Update the bundled qs JavaScript library to a version that resolves a reported security advisory (CVE-2025-15284).
 
 = 3.6.14 - 2026-09-03 =
 * Fix   - Prevent a fatal error at checkout when a cart line's price is not numeric.
