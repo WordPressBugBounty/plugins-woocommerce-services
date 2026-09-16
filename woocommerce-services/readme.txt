@@ -7,7 +7,7 @@ Requires Plugins: woocommerce
 Tested up to: 7.1
 WC requires at least: 10.9
 WC tested up to: 11.1
-Stable tag: 3.6.15
+Stable tag: 3.6.16
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,9 @@ This plugin relies on the following external services:
 2. Checking on the health of WooCommerce Tax
 
 == Changelog ==
+
+= 3.6.16 - 2026-09-16 =
+* Tweak - Update the Jetpack Connection package to 9.1.2.
 
 = 3.6.15 - 2026-09-07 =
 * Add   - Prompt merchants to finish signing in to WordPress.com when the site is connected but no account is linked to it, so the missing step is named instead of hidden.
