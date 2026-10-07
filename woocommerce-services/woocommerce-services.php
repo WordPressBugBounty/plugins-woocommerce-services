@@ -8,13 +8,15 @@
  * Author URI: https://woocommerce.com/
  * Text Domain: woocommerce-services
  * Domain Path: /i18n/languages/
- * Version: 3.7.0
+ * License: GPLv2 or later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
+ * Version: 3.7.1
  * Requires Plugins: woocommerce
  * Requires PHP: 7.4
  * Requires at least: 7.0
  * Tested up to: 7.1
  * WC requires at least: 10.9
- * WC tested up to: 11.1
+ * WC tested up to: 11.2
  *
  * Copyright (c) 2017-2023 Automattic
  *
@@ -93,6 +95,13 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 		 * @var string
 		 */
 		const DISMISS_SERVER_NOTICE_NONCE_NAME = '_wc_connect_notice_nonce';
+
+		/**
+		 * Most bytes of a request body log_rest_api_errors() writes to the log.
+		 *
+		 * @var int
+		 */
+		private const REST_ERROR_LOG_BODY_LIMIT = 1024;
 
 		/**
 		 * @var WC_Connect_Logger
@@ -1384,25 +1393,99 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 		 *
 		 * Note: intended to be hooked into 'rest_request_before_callbacks'
 		 *
-		 * @param WP_HTTP_Response $response Result to send to the client. Usually a WP_REST_Response.
-		 * @param WP_REST_Server   $handler  ResponseHandler instance (usually WP_REST_Server).
-		 * @param WP_REST_Request  $request  Request used to generate the response.
+		 * WordPress applies that filter before the route's permission check, and skips the
+		 * check when the request already failed (invalid JSON, missing or invalid params).
+		 * So only requests the route itself allows are logged. The error line is always
+		 * written; the request body only when debug logging is on, shortened and escaped.
+		 * The admin error notice is not touched.
+		 *
+		 * @param WP_REST_Response|WP_HTTP_Response|WP_Error|mixed $response Result to send to the client. Usually a WP_REST_Response.
+		 * @param array                                            $handler  Route handler used for the request.
+		 * @param WP_REST_Request                                  $request  Request used to generate the response.
 		 *
 		 * @return mixed - pass through value of $response.
 		 */
 		public function log_rest_api_errors( $response, $handler, $request ) {
-			if ( ! is_wp_error( $response ) ) {
+			if ( ! is_wp_error( $response ) || ! $request instanceof WP_REST_Request ) {
 				return $response;
 			}
 
-			if ( 0 === strpos( $request->get_route(), '/wc/v1/connect/' ) ) {
-				$route_info = $request->get_method() . ' ' . $request->get_route();
+			if ( 0 !== strpos( $request->get_route(), '/wc/v1/connect/' ) || ! $this->rest_route_allows_request( $handler, $request ) ) {
+				return $response;
+			}
 
-				$this->get_logger()->error( $response, $route_info );
-				$this->get_logger()->error( $route_info, $request->get_body() );
+			$logger     = $this->get_logger();
+			$route_info = $request->get_method() . ' ' . $this->encode_for_log( $request->get_route() );
+
+			// log() rather than error(): a REST error must not replace the admin error notice.
+			$logger->log( $response, $route_info, true );
+
+			// A request with no body has nothing to add.
+			if ( $logger->is_logging_enabled() && '' !== (string) $request->get_body() ) {
+				$logger->log( $route_info, $this->format_rest_body_for_log( $request->get_body() ) );
 			}
 
 			return $response;
+		}
+
+		/**
+		 * Whether the route's own permission check allows a request.
+		 *
+		 * WordPress skips its own check for a request that failed validation. It still
+		 * calls the callback afterwards to build the Allow header, which does not decide
+		 * access. A missing or non-callable check counts as denied.
+		 *
+		 * @param array|mixed     $handler Route handler used for the request.
+		 * @param WP_REST_Request $request Request used to generate the response.
+		 *
+		 * @return bool
+		 */
+		private function rest_route_allows_request( $handler, $request ) {
+			if ( ! is_array( $handler ) || empty( $handler['permission_callback'] ) || ! is_callable( $handler['permission_callback'] ) ) {
+				return false;
+			}
+
+			$permission = call_user_func( $handler['permission_callback'], $request );
+
+			return ! is_wp_error( $permission ) && false !== $permission && null !== $permission;
+		}
+
+		/**
+		 * JSON-encode request text for the log.
+		 *
+		 * ASCII line breaks and control characters are escaped, so the text cannot add lines
+		 * of its own to the log. Invalid UTF-8 is replaced rather than dropping the text.
+		 *
+		 * @param string $text Text taken from the request.
+		 *
+		 * @return string The quoted, escaped text.
+		 */
+		private function encode_for_log( $text ) {
+			$encoded = wp_json_encode( (string) $text, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE );
+
+			return false === $encoded ? '""' : $encoded;
+		}
+
+		/**
+		 * Describe a request body for the log: its length and an encoded excerpt.
+		 *
+		 * @param string $body Raw request body.
+		 *
+		 * @return string
+		 */
+		private function format_rest_body_for_log( $body ) {
+			$body    = (string) $body;
+			$length  = strlen( $body );
+			$is_long = $length > self::REST_ERROR_LOG_BODY_LIMIT;
+			$excerpt = $body;
+
+			if ( $is_long ) {
+				$excerpt = function_exists( 'mb_strcut' )
+					? mb_strcut( $body, 0, self::REST_ERROR_LOG_BODY_LIMIT, 'UTF-8' )
+					: substr( $body, 0, self::REST_ERROR_LOG_BODY_LIMIT );
+			}
+
+			return sprintf( 'body, %d bytes: %s%s', $length, $this->encode_for_log( $excerpt ), $is_long ? '...' : '' );
 		}
 
 		/**
@@ -1782,6 +1865,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 			}
 
 			// Order list page doesn't have the action parameter in the querystring.
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only: distinguishes WooCommerce's order list screen from the single order screen, which is the only one that carries the action arg. It only gates which assets are enqueued.
 			if ( isset( $_GET['action'] ) ) {
 				return false;
 			}
@@ -1838,9 +1922,9 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 				);
 			}
 
-			wp_register_script( 'wc_services_admin_pointers', $this->wc_connect_base_url . 'woocommerce-services-admin-pointers-' . $plugin_version . '.js', array( 'wp-pointer', 'jquery' ), null );
-			wp_register_style( 'wc_connect_banner', $this->wc_connect_base_url . 'woocommerce-services-banner-' . $plugin_version . '.css', array(), null );
-			wp_register_script( 'wc_connect_banner', $this->wc_connect_base_url . 'woocommerce-services-banner-' . $plugin_version . '.js', array(), null );
+			wp_register_script( 'wc_services_admin_pointers', $this->wc_connect_base_url . 'woocommerce-services-admin-pointers-' . $plugin_version . '.js', array( 'wp-pointer', 'jquery' ), null ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion, WordPress.WP.EnqueuedResourceParameters.NotInFooter -- Served from the Connect Server and the version is already in the file name, so no ?ver= is wanted. Registered in the head because the wp-pointer it drives runs before the footer.
+			wp_register_style( 'wc_connect_banner', $this->wc_connect_base_url . 'woocommerce-services-banner-' . $plugin_version . '.css', array(), null ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- Served from the Connect Server and the version is already in the file name, so no ?ver= is wanted.
+			wp_register_script( 'wc_connect_banner', $this->wc_connect_base_url . 'woocommerce-services-banner-' . $plugin_version . '.js', array(), null ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion, WordPress.WP.EnqueuedResourceParameters.NotInFooter -- Served from the Connect Server and the version is already in the file name, so no ?ver= is wanted. Registered in the head so the banner is styled and wired before first paint.
 
 			$i18n_json = $this->get_i18n_json();
 			// JS translations loaded from i18n/languages/woocommerce-services-{LOCALE}.json via get_i18n_json().
@@ -1868,6 +1952,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 			$shipping_service_ids     = $this->get_service_schemas_store()->get_all_shipping_method_ids();
 
 			foreach ( $shipping_service_ids as $shipping_service_id ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Asks only whether an enabled zone method row exists for this method id; WC_Shipping_Zones has no such reader and would instantiate every shipping method to answer it. Not cached because zone methods are enabled and disabled from WooCommerce's own screens with no hook this plugin could invalidate on, and a stale answer would misreport the store's active services to the Connect server.
 				$is_active = $wpdb->get_var(
 					$wpdb->prepare(
 						"SELECT instance_id FROM {$wpdb->prefix}woocommerce_shipping_zone_methods WHERE is_enabled = 1 AND method_id = %s LIMIT 1;",
@@ -2070,6 +2155,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 
 			$meta_table_to_check = OrderUtil::get_table_for_order_meta();
 
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Indexed EXISTS probe on the order meta table; core offers no "does any order carry this meta key" API, and wc_get_orders() cannot run this early (the check is reachable from the all_plugins filter). Left uncached deliberately: the answer decides whether the plugin's shipping features load at all, and the meta is also written by the WooCommerce Shipping migration, so there is no write this plugin could hang invalidation on, and serving a stale "no labels" would hide shipping from a store that has it.
 			return (bool) $wpdb->get_var(
 				$wpdb->prepare(
 					'SELECT EXISTS (
@@ -2167,7 +2253,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 				'sift-science',
 				'https://cdn.sift.com/s.js',
 				array(),
-				null,
+				null, // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- Third-party script served from Sift's CDN, which versions it server side; a ?ver= we invent would be wrong.
 				array(
 					'strategy'  => 'defer',
 					'in_footer' => true,
@@ -2251,9 +2337,12 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 
 			$encoded_arguments = wp_json_encode( $extra_args );
 			?>
-				<div class="wcc-root woocommerce <?php echo esc_attr( $root_view ); ?>" data-args="<?php echo wc_esc_json( $encoded_arguments ); ?>">
+				<div class="wcc-root woocommerce <?php echo esc_attr( $root_view ); ?>" data-args="<?php echo wc_esc_json( $encoded_arguments ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- wc_esc_json() escapes JSON for use in an HTML attribute. ?>">
 					<span class="form-troubles" style="opacity: 0">
-						<?php printf( esc_html__( 'Section not loading? Visit the <a href="%s">status page</a> for troubleshooting steps.', 'woocommerce-services' ), esc_url( $debug_page_uri ) ); ?>
+						<?php
+						/* translators: %s: URL of the status page */
+						printf( esc_html__( 'Section not loading? Visit the <a href="%s">status page</a> for troubleshooting steps.', 'woocommerce-services' ), esc_url( $debug_page_uri ) );
+						?>
 					</span>
 				</div>
 			<?php
@@ -2388,7 +2477,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 				) .
 				sprintf(
 					/* translators: %s: documentation URL */
-					__( $banner->message, 'woocommerce-services' ),
+					__( $banner->message, 'woocommerce-services' ), // phpcs:ignore WordPress.WP.I18n.NonSingularStringLiteralText -- The message is supplied by the WooCommerce Tax server.
 					'https://woocommerce.com/document/woocommerce-shipping-and-tax/woocommerce-shipping/#how-do-i-migrate-from-wcst'
 				) .
 				sprintf(
@@ -2406,7 +2495,7 @@ if ( ! class_exists( 'WC_Connect_Loader' ) ) {
 		public function register_wcshipping_migration_modal() {
 			$plugin_version = self::get_wcs_version();
 			wp_register_style( 'wcst_wcshipping_migration_admin_notice', $this->wc_connect_base_url . 'woocommerce-services-wcshipping-migration-admin-notice-' . $plugin_version . '.css', array(), null ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion
-			wp_register_script( 'wcst_wcshipping_migration_admin_notice', $this->wc_connect_base_url . 'woocommerce-services-wcshipping-migration-admin-notice-' . $plugin_version . '.js', array(), null );
+			wp_register_script( 'wcst_wcshipping_migration_admin_notice', $this->wc_connect_base_url . 'woocommerce-services-wcshipping-migration-admin-notice-' . $plugin_version . '.js', array(), null ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion, WordPress.WP.EnqueuedResourceParameters.NotInFooter -- Served from the Connect Server and the version is already in the file name, so no ?ver= is wanted. Registered in the head alongside the stylesheet above, which carries the same note.
 			wp_localize_script(
 				'wcst_wcshipping_migration_admin_notice',
 				'wcsPluginData',

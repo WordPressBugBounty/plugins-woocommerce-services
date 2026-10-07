@@ -1,5 +1,9 @@
 <?php
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 
 	class WC_Connect_Nux {
@@ -17,6 +21,16 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 		 * after the JP connection flow
 		 */
 		const SHOULD_SHOW_AFTER_CXN_BANNER = 'should_display_nux_after_jp_cxn_banner';
+
+		/**
+		 * Nonce action guarding the "accept the Terms of Service" link on the connection banner.
+		 */
+		const ACCEPT_TOS_NONCE_ACTION = 'wcs-nux-tos-accept';
+
+		/**
+		 * Nonce action guarding the "dismiss" link on the post-connection banner.
+		 */
+		const DISMISS_AFTER_CXN_BANNER_NONCE_ACTION = 'wcs-nux-notice-dismiss';
 
 		/**
 		 * @var WC_Connect_Tracks
@@ -135,6 +149,7 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 			if ( false === $is_new_user ) {
 				global $wpdb;
 
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Existence probe for one meta key across all posts; core has no API for "does any post carry this meta". The answer is memoised in the IS_NEW_LABEL_USER transient a few lines below, so this runs once per transient lifetime.
 				$results     = $wpdb->get_results(
 					$wpdb->prepare(
 						"SELECT meta_key FROM {$wpdb->postmeta} WHERE meta_key = %s LIMIT 1",
@@ -174,6 +189,7 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 					'content'  => sprintf(
 						'<h3>%s</h3><p>%s</p>',
 						__( 'Discounted Shipping Labels', 'woocommerce-services' ),
+						/* translators: %s: list of supported carriers */
 						sprintf( __( "When you're ready, purchase and print discounted labels from %s right here.", 'woocommerce-services' ), implode( ' or ', $supported_carriers ) )
 					),
 					'position' => array(
@@ -299,6 +315,21 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 		}
 
 		/**
+		 * Whether the current user may accept the Terms of Service.
+		 *
+		 * Only the Jetpack connection owner may, or any user while Jetpack is in offline mode.
+		 * This checks no capability, so in offline mode it is true for every user: callers must
+		 * check capabilities themselves.
+		 *
+		 * @since 3.7.1
+		 *
+		 * @return bool
+		 */
+		public static function current_user_can_accept_tos() {
+			return WC_Connect_Jetpack::is_current_user_connection_owner() || WC_Connect_Jetpack::is_offline_mode();
+		}
+
+		/**
 		 * Whether the WooCommerce Tax connection banner may render on the given screen.
 		 *
 		 * The banner only offers WooCommerce Tax, so it is confined to where WooCommerce
@@ -319,6 +350,7 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 			}
 
 			return 'woocommerce_page_wc-settings' === $screen->base
+				// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only screen check: WooCommerce puts the settings tab in the URL, and this only decides whether the banner is rendered on it. No state is touched here.
 				&& isset( $_GET['tab'] ) && 'tax' === $_GET['tab'];
 		}
 
@@ -384,13 +416,15 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 			// Admins might not be able to install or activate plugins, but Jetpack might already have been installed by a superadmin.
 			// If this is the case, the admin can connect the site on their own, and should be able to use WCS as ususal
 			$jetpack_install_status = $this->get_jetpack_install_status();
+			$can_accept_tos         = self::current_user_can_accept_tos();
 
 			$banner_to_display = self::get_banner_type_to_display(
 				array(
 					'jetpack_connection_status'       => $jetpack_install_status,
 					'tos_accepted'                    => WC_Connect_Options::get_option( 'tos_accepted' ),
-					'can_accept_tos'                  => WC_Connect_Jetpack::is_current_user_connection_owner() || WC_Connect_Jetpack::is_offline_mode(),
-					'should_display_after_cxn_banner' => WC_Connect_Options::get_option( self::SHOULD_SHOW_AFTER_CXN_BANNER ),
+					'can_accept_tos'                  => $can_accept_tos,
+					// The after-connection banner accepts the terms on render, so only a user who may accept gets it.
+					'should_display_after_cxn_banner' => $can_accept_tos && WC_Connect_Options::get_option( self::SHOULD_SHOW_AFTER_CXN_BANNER ),
 					'is_site_only_connection'         => WC_Connect_Jetpack::is_site_only_connection(),
 				)
 			);
@@ -517,6 +551,24 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 			);
 		}
 
+		/**
+		 * Verifies the nonce carried by a banner link before it is allowed to change any state.
+		 *
+		 * The banner links are plain GET links rendered into an admin notice, so without this
+		 * an attacker could make a logged-in admin accept the Terms of Service or dismiss the
+		 * banner just by getting them to load a URL.
+		 *
+		 * @param string $action Nonce action the link was created with.
+		 * @return bool True when the request carries a valid nonce for $action.
+		 */
+		private static function is_nux_action_verified( $action ) {
+			if ( empty( $_GET['_wpnonce'] ) ) {
+				return false;
+			}
+
+			return (bool) wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), $action );
+		}
+
 		public function show_banner_after_connection() {
 			if ( ! $this->should_display_nux_notice_for_current_store_locale() ) {
 				return;
@@ -527,11 +579,21 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 			}
 
 			// Did the user just dismiss?
-			if ( isset( $_GET['wcs-nux-notice'] ) && 'dismiss' === $_GET['wcs-nux-notice'] ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- The nonce is verified by self::is_nux_action_verified() on the next line before anything is written.
+			if ( isset( $_GET['wcs-nux-notice'] ) && 'dismiss' === $_GET['wcs-nux-notice']
+				&& self::is_nux_action_verified( self::DISMISS_AFTER_CXN_BANNER_NONCE_ACTION ) ) {
 				// No longer need to keep track of whether the before connection banner was displayed.
 				WC_Connect_Options::delete_option( self::SHOULD_SHOW_AFTER_CXN_BANNER );
-				wp_safe_redirect( remove_query_arg( 'wcs-nux-notice' ) );
+				wp_safe_redirect( remove_query_arg( array( 'wcs-nux-notice', '_wpnonce' ) ) );
 				exit;
+			}
+
+			// Only a user who may accept the terms accepts them by seeing this banner.
+			if ( ! self::current_user_can_accept_tos() ) {
+				if ( ! WC_Connect_Options::get_option( 'tos_accepted' ) ) {
+					$this->show_tos_informational_banner();
+				}
+				return;
 			}
 
 			// By going through the connection process, the user has accepted our TOS
@@ -549,10 +611,13 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 					'title'             => __( 'Setup complete.', 'woocommerce-services' ),
 					'description'       => esc_html( sprintf( $description_base, $feature_list ) ),
 					'button_text'       => __( 'Got it, thanks!', 'woocommerce-services' ),
-					'button_link'       => add_query_arg(
-						array(
-							'wcs-nux-notice' => 'dismiss',
-						)
+					'button_link'       => wp_nonce_url(
+						add_query_arg(
+							array(
+								'wcs-nux-notice' => 'dismiss',
+							)
+						),
+						self::DISMISS_AFTER_CXN_BANNER_NONCE_ACTION
 					),
 					'image_url'         => plugins_url(
 						'images/wcs-notice.png',
@@ -572,12 +637,22 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 				return;
 			}
 
-			if ( isset( $_GET['wcs-nux-tos'] ) && 'accept' === $_GET['wcs-nux-tos'] ) {
+			// Only a user who may accept the terms gets the link that accepts them.
+			if ( ! self::current_user_can_accept_tos() ) {
+				if ( ! WC_Connect_Options::get_option( 'tos_accepted' ) ) {
+					$this->show_tos_informational_banner();
+				}
+				return;
+			}
+
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- The nonce is verified by self::is_nux_action_verified() on the next line before the Terms of Service acceptance is stored.
+			if ( isset( $_GET['wcs-nux-tos'] ) && 'accept' === $_GET['wcs-nux-tos']
+				&& self::is_nux_action_verified( self::ACCEPT_TOS_NONCE_ACTION ) ) {
 				WC_Connect_Options::update_option( 'tos_accepted', true );
 
 				$this->tracks->opted_in( 'tos_banner' );
 
-				wp_safe_redirect( remove_query_arg( 'wcs-nux-tos' ) );
+				wp_safe_redirect( remove_query_arg( array( 'wcs-nux-tos', '_wpnonce' ) ) );
 				exit;
 			}
 
@@ -591,10 +666,13 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 					'title'             => __( 'Connect your site to activate WooCommerce Tax', 'woocommerce-services' ),
 					'description'       => esc_html( sprintf( $description_base, $feature_list ) ),
 					'button_text'       => __( 'Connect', 'woocommerce-services' ),
-					'button_link'       => add_query_arg(
-						array(
-							'wcs-nux-tos' => 'accept',
-						)
+					'button_link'       => wp_nonce_url(
+						add_query_arg(
+							array(
+								'wcs-nux-tos' => 'accept',
+							)
+						),
+						self::ACCEPT_TOS_NONCE_ACTION
 					),
 					'image_url'         => plugins_url(
 						'images/wcs-notice.png',
@@ -652,9 +730,9 @@ if ( ! class_exists( 'WC_Connect_Nux' ) ) {
 					<?php if ( isset( $content['should_show_terms'] ) && $content['should_show_terms'] ) : ?>
 						<p class="wcs-nux__notice-content-tos">
 							<?php
-							/* translators: %1$s example values include "Install Jetpack and CONNECT >", "Activate Jetpack and CONNECT >", "CONNECT >" */
 							printf(
 								wp_kses(
+									/* translators: %1$s: button text, example values include "Install Jetpack and CONNECT >", "Activate Jetpack and CONNECT >", "CONNECT >", %2$s: Terms of Service URL, %3$s: Privacy Policy URL */
 									__( 'By clicking "%1$s", you agree to our <a href="%2$s">Terms of Service</a> and have read our <a href="%3$s">Privacy Policy</a>.', 'woocommerce-services' ),
 									array(
 										'a' => array(

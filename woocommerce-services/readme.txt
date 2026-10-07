@@ -6,8 +6,8 @@ Requires at least: 7.0
 Requires Plugins: woocommerce
 Tested up to: 7.1
 WC requires at least: 10.9
-WC tested up to: 11.1
-Stable tag: 3.7.0
+WC tested up to: 11.2
+Stable tag: 3.7.1
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -70,10 +70,36 @@ This plugin relies on the following external services:
 
 == Changelog ==
 
+= 3.7.1 - 2026-10-07 =
+* Add   - Check a US store address when it changes, and show a notice in the admin when its state or ZIP code looks wrong or is missing, since either can make automated taxes charge the wrong tax or none.
+* Fix   - Stop the classic checkout from jumping to the top of the page and taking focus away from the ZIP code field when an invalid ZIP code is entered, which could loop endlessly with address autocomplete enabled.
+* Fix   - Stop a store address with a missing or badly formatted ZIP code from blocking checkout with "ZIP Code is not formatted correctly." The order now goes through, but its tax is not looked up: it gets only the tax rates saved by earlier lookups for the same address, or no tax. A notice in the admin asks you to fix the ZIP code.
+* Fix   - Send the street with the address when you click Recalculate on an order that has no shipping address, so tax is not calculated from the ZIP code alone. Recalculate also no longer freezes when the city contains a double quote.
+* Fix   - Stop automated tax lookups from overwriting a tax rate you set up for a whole state with no ZIP code or city, which could leave in-person and mobile app orders with no tax.
+* Fix   - Recalculating an order in the admin now charges the tax rates returned by the tax service, as checkout does. Other tax rates you set up for the same address are no longer added on top.
+* Fix   - Update an order's tax when its items, quantities, fees, shipping or coupons change through the REST API or the WooCommerce app, using the tax rates recorded when the order was placed. Since 3.6.8 the tax stayed at its original amount after these edits, and each change is now recorded in an order note.
+* Fix   - Stop putting tax back on an order that was made VAT exempt after it was placed.
+* Fix   - Look up the tax for the new address when an order's address changes through the REST API or the WooCommerce app. If the tax service cannot answer, the order keeps its tax and a note says so.
+* Fix   - Calculate tax with WooCommerce Tax for orders created through the REST API, the WooCommerce app or point of sale, instead of using whatever tax rates happened to be stored for that area.
+* Fix   - Keep the TaxJar product tax code when recalculating an order in the admin for tax classes whose name has more than one word, such as "Reduced rate 12345", so the order is taxed the same as at checkout. Products in the built-in "Zero rate" class also stay tax-free when the order is recalculated.
+* Fix   - Unslash and sanitize request values in the label reports, settings, migration survey and tracking code, and stop using print_r in log messages.
+* Fix   - Require a nonce on the setup banner's Terms of Service and dismiss links, so they cannot be triggered by loading a crafted URL.
+* Fix   - Stop Recalculate and saving an order's items in the admin from logging a PHP notice for every item and saving an extra tax line with no name, which other plugins could see before it was removed again.
+* Fix   - Stop REST requests the site would refuse from writing to the WooCommerce Tax log, and stop REST errors from replacing the error notice shown to store managers. Request bodies are shortened and only logged when debug logging is on.
+* Fix   - Prevent a fatal error in the tax calculation when custom code creates the TaxJar integration without a store notices notifier.
+* Fix   - Prevent a rare fatal error when WooCommerce Tax registers its Store API data on incomplete WooCommerce installations.
+* Fix   - Stop store admins other than the Jetpack connection owner from accepting the WooCommerce Tax Terms of Service through the REST API or the banner shown after connecting.
+* Fix   - Check that the order exists, and that a shipping label belongs to it, before buying a label, getting rates, checking a label's status or refunding a label. Customs details are only saved to products on that order.
+* Tweak - Block direct access to the remaining class files and declare the license in the plugin header.
+* Tweak - Include composer.json in the plugin package.
+* Tweak - Bind the service IDs in the enabled services query with prepare() instead of escaping them by hand.
+* Tweak - WooCommerce 11.2 Compatibility.
+
 = 3.7.0 - 2026-09-22 =
 * Fix   - Prevent a fatal error that stopped WooCommerce Tax from being deactivated while WooCommerce was inactive.
 * Tweak - Update the bundled JavaScript libraries.
 * Tweak - Build the plugin's JavaScript on Node.js 24 and drop the wp-calypso submodule, keeping vendored copies of the modules it provided.
+* Tweak - Load every translatable string from the plugin's own text domain and add translator notes to strings with placeholders.
 
 = 3.6.16 - 2026-09-16 =
 * Tweak - Update the Jetpack Connection package to 9.1.2.

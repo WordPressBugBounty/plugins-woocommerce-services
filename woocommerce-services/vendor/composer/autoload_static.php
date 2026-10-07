@@ -118,6 +118,8 @@ class ComposerStaticInit6b63a7d54ced045bbbe89c309f706ec2
         'Automattic\\WCServices\\StoreNotices\\StoreNoticesController' => __DIR__ . '/../..' . '/src/StoreNotices/StoreNoticesController.php',
         'Automattic\\WCServices\\StoreNotices\\StoreNoticesNotifier' => __DIR__ . '/../..' . '/src/StoreNotices/StoreNoticesNotifier.php',
         'Automattic\\WCServices\\Tax\\Address' => __DIR__ . '/../..' . '/src/Tax/Address.php',
+        'Automattic\\WCServices\\Tax\\StoreAddressNotice' => __DIR__ . '/../..' . '/src/Tax/StoreAddressNotice.php',
+        'Automattic\\WCServices\\Tax\\StoreAddressVerifier' => __DIR__ . '/../..' . '/src/Tax/StoreAddressVerifier.php',
         'Automattic\\WCServices\\Utils' => __DIR__ . '/../..' . '/src/Utils.php',
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
         'Jetpack_IXR_Client' => __DIR__ . '/..' . '/automattic/jetpack-connection/legacy/class-jetpack-ixr-client.php',

@@ -366,6 +366,14 @@ return array(
 		'version' => 'dev-trunk',
 		'path'    => $baseDir . '/src/Tax/Address.php'
 	),
+	'Automattic\\WCServices\\Tax\\StoreAddressNotice' => array(
+		'version' => 'dev-trunk',
+		'path'    => $baseDir . '/src/Tax/StoreAddressNotice.php'
+	),
+	'Automattic\\WCServices\\Tax\\StoreAddressVerifier' => array(
+		'version' => 'dev-trunk',
+		'path'    => $baseDir . '/src/Tax/StoreAddressVerifier.php'
+	),
 	'Automattic\\WCServices\\Utils' => array(
 		'version' => 'dev-trunk',
 		'path'    => $baseDir . '/src/Utils.php'
