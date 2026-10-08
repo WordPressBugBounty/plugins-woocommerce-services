@@ -5,9 +5,9 @@ Requires PHP: 7.4
 Requires at least: 7.0
 Requires Plugins: woocommerce
 Tested up to: 7.1
-WC requires at least: 10.9
+WC requires at least: 11.0
 WC tested up to: 11.2
-Stable tag: 3.7.1
+Stable tag: 3.7.2
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,11 @@ This plugin relies on the following external services:
 2. Checking on the health of WooCommerce Tax
 
 == Changelog ==
+
+= 3.7.2 - 2026-10-08 =
+* Fix   - Improve handling of shipping features on tax-only stores.
+* Fix   - Improve reliability during plugin updates.
+* Tweak - Changing shipping label account settings, including the selected credit card, now requires the Manage WooCommerce capability.
 
 = 3.7.1 - 2026-10-07 =
 * Add   - Check a US store address when it changes, and show a notice in the admin when its state or ZIP code looks wrong or is missing, since either can make automated taxes charge the wrong tax or none.
